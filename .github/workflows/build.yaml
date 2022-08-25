@@ -1,0 +1,99 @@
+name: Build-Artifact-Unittest
+on:
+  workflow_dispatch:
+
+env:
+  RP: ${{ github.repository }}
+  BR: ${{ github.ref_name }}
+
+jobs:
+  Build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 2
+        
+    - name: Check User Validation
+      run: |
+        echo "Branch=${{ github.ref_name }}"
+        if [[ "${{ github.ref_name }}" == "master" ]]; then
+          echo "Only Admin's can run workflow for master branch."
+          cat CODEOWNERS | grep -w "@${{ github.actor }}"
+          echo "User Validation is Passed."
+        fi
+    - name: Create Build-Artifact
+      run: |
+        echo "Branch=${{ github.ref_name }}"
+        BRANCH=`echo $BR | cut -f 2 -d /`
+        VERSION=`cat version.py | grep 'version=' | sed 's/"//g' | awk -F '=' '{ print $2 }'`
+        cat > build_info << EOF
+        BRANCHNAME=${{ github.ref_name }}
+        USER=${{ github.actor }}
+        RELEASEVERSION=$VERSION
+        DATE=`date "+%Y/%m/%d-%H:%M:%S"`
+        SHA=${{ github.sha }}
+        EOF
+        BUILD=build_"$BRANCH"_"v$VERSION"
+        zip -r "$BUILD".zip ./*
+        echo "Created a Build-Artifacts."
+    - name: Upload Build-Artifact
+      uses: actions/upload-artifact@v2
+      with:
+          name: Build-Artifacts
+          path: build_*.zip
+
+  Unittests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 2
+
+      - name: Configure Databricks-Connect & Run Tests cases on Cluster
+        run: |
+          echo "Branch=${{ github.ref_name }}"
+          pip install virtualenv
+          virtualenv venv
+          source venv/bin/activate
+          pip install -r test_requirements.txt
+          BRANCH=$BR
+          echo "$BRANCH"
+          if [[ $BRANCH == master ]]; then
+            DATABRICKS_HOST="${{ secrets.DATABRICKS_HOST_PROD }}"
+            DATABRICKS_TOKEN="${{ secrets.DATABRICKS_TOKEN_PROD }}"
+            DATABRICKS_UNITTEST_CLUSTER_ID="${{ secrets.DATABRICKS_UNITTEST_CLUSTER_ID_PROD }}"
+            DATABRICKS_WORKSPACE_ORG_ID="${{ secrets.DATABRICKS_WORKSPACE_ORG_ID_PROD }}"
+          elif [[ $BRANCH == release ]]; then
+            DATABRICKS_HOST="${{ secrets.DATABRICKS_HOST_QA }}"
+            DATABRICKS_TOKEN="${{ secrets.DATABRICKS_TOKEN_QA }}"
+            DATABRICKS_UNITTEST_CLUSTER_ID="${{ secrets.DATABRICKS_UNITTEST_CLUSTER_ID_QA }}"
+            DATABRICKS_WORKSPACE_ORG_ID="${{ secrets.DATABRICKS_WORKSPACE_ORG_ID_QA }}"
+          elif [[ $BRANCH == user/** ]]; then
+            DATABRICKS_HOST="${{ secrets.DATABRICKS_HOST_EXPL }}"
+            DATABRICKS_TOKEN="${{ secrets.DATABRICKS_TOKEN_EXPL }}"
+            DATABRICKS_UNITTEST_CLUSTER_ID="${{ secrets.DATABRICKS_UNITTEST_CLUSTER_ID_EXPL }}"
+            DATABRICKS_WORKSPACE_ORG_ID="${{ secrets.DATABRICKS_WORKSPACE_ORG_ID_EXPL }}"
+          fi
+          echo "y
+          $DATABRICKS_HOST
+          $DATABRICKS_TOKEN
+          $DATABRICKS_UNITTEST_CLUSTER_ID
+          $DATABRICKS_WORKSPACE_ORG_ID
+          15001" | databricks-connect configure
+          PYTHONPATH=$PYTHONPATH:databricks_notebook_jobs pytest tests --junitxml=unit-testresults.xml
+          BRANCH=`echo $BR | cut -f 2 -d /`
+          VERSION=`cat version.py | grep 'version=' | sed 's/"//g' | awk -F '=' '{ print $2 }'`
+          ZIP="unittests-$BRANCH-v$VERSION"
+          zip -r  "$ZIP".zip unit-testresults.xml
+      - name: Upload Unittest-Result Artifact
+        uses: actions/upload-artifact@v2
+        with:
+           name: Unittests-Result
+           path: unittests-*.zip
