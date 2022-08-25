@@ -1,0 +1,144 @@
+name: Deploy-Databricks-Jobs
+on:
+  workflow_dispatch:
+    inputs:
+      buildId:
+         description: 'Enter Build ID Number'
+         required: true
+         default: '0'
+env:
+  RP: ${{ github.repository }}
+  BR: ${{ github.ref_name }}
+
+jobs:
+  Deploy-Databricks-Jobs:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        
+    steps:
+    - name: Check User Validation
+      run: |
+        echo "Branch=${{ github.ref_name }}"
+        if [[ "${{ github.ref_name }}" == "master" ]]; then
+          for i in `cat CODEOWNERS`; do
+            if [[ "${{ github.actor }}" != "$i" ]]; then
+              echo "You ${{ github.actor }} do not have permission to run workflow for ${{ github.ref_name }} branch."
+              echo "User Validation is Failed."
+              exit 1
+            fi
+          done
+        else
+          echo "User Validation is Passed."
+        fi
+        
+    - name: Download Build-Artifacts
+      uses: dawidd6/action-download-artifact@v2
+      with:
+        github_token: ${{secrets.GH_ACCESS_TOKEN}}
+        workflow: build.yaml
+        run_number: ${{ github.event.inputs.buildId }}
+        name: Build-Artifacts
+        
+    - name: Validate Build-Artifact
+      run: |
+        echo "Branch=${{ github.ref_name }}"
+        for i in `ls`; do fname=$i; done
+        unzip -qq $fname && rm $fname
+        branch_validate=`cat build_info | grep "BRANCHNAME" | awk -F '=' '{ print $2 }'`
+        if [[ "${{ github.ref_name }}" == "$branch_validate" ]]; then
+          echo "Builld validation is Passed."
+        else
+          echo "You cannot deploy a build from $branch_validate to ${{ github.ref_name }}."
+          echo "Build validation is Failed."
+          exit 1
+        fi
+        
+    - name: Install Databricks-Deploy CLI
+      run: |
+        pip install git+https://${{ secrets.GH_ACCESS_TOKEN }}@github.com/mondelez-d4gv/mdlz-mlops-databricks-deploy.git@v0.0.1
+    - name: Deploy Databricks-Jobs
+      env:
+        GOOGLE_APPLICATION_CREDENTIALS_DEV: ${{ secrets.MDZ_D_CICD_EXT_SA }}
+        GOOGLE_APPLICATION_CREDENTIALS_QA: ${{ secrets.MDZ_Q_CICD_EXT_SA }}
+        GOOGLE_APPLICATION_CREDENTIALS_PROD: ${{ secrets.MDZ_P_CICD_EXT_SA }}
+      run: |
+        BRANCH=${{ github.ref_name }}
+        REPO_NAME=`echo $RP | cut -f 2 -d /`
+        echo "Branch=${{ github.ref_name }}"
+        if [[ $BRANCH == master ]]; then
+          ENV=prod
+          BRANCH_NAME=`echo $BR`
+          GS_ACCOUNT="${{ secrets.GOOGLE_SERVICE_ACCOUNT_PROD }}"
+          DATABRICKS_HOST="${{ secrets.DATABRICKS_HOST_PROD }}"
+          DATABRICKS_TOKEN="${{ secrets.DATABRICKS_TOKEN_PROD }}"
+          GOOGLE_APPLICATION_CREDENTIALS="$GOOGLE_APPLICATION_CREDENTIALS_PROD"
+        elif [[ $BRANCH == release ]]; then
+          ENV=qa
+          BRANCH_NAME=`echo $BR`
+          GS_ACCOUNT="${{ secrets.GOOGLE_SERVICE_ACCOUNT_QA }}"
+          DATABRICKS_HOST="${{ secrets.DATABRICKS_HOST_QA }}"
+          DATABRICKS_TOKEN="${{ secrets.DATABRICKS_TOKEN_QA }}"
+          GOOGLE_APPLICATION_CREDENTIALS="$GOOGLE_APPLICATION_CREDENTIALS_QA"
+        elif [[ $BRANCH == user/** ]]; then
+          ENV=dev
+          BRANCH_NAME=`echo $BR | cut -f 2 -d /`
+          GS_ACCOUNT="${{ secrets.GOOGLE_SERVICE_ACCOUNT_EXPL }}"
+          DATABRICKS_HOST="${{ secrets.DATABRICKS_HOST_EXPL }}"
+          DATABRICKS_TOKEN="${{ secrets.DATABRICKS_TOKEN_EXPL }}"
+          GOOGLE_APPLICATION_CREDENTIALS="$GOOGLE_APPLICATION_CREDENTIALS_PROD"
+        fi
+        echo $GOOGLE_APPLICATION_CREDENTIALS > $GITHUB_WORKSPACE/devops/key.json
+        export GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/devops/key.json
+        gcloud auth activate-service-account --key-file=$GITHUB_WORKSPACE/devops/key.json
+        # Setting environment variables
+        for var in $(jq -r ".$ENV|to_entries|map(\"\(.key)=\(.value|tostring)\")|.[]" devops/params.json); do
+          export $var;
+        done
+       
+        # Copying files to GCS Bucket
+        # gsutil rsync -r $GITHUB_WORKSPACE/ gs://$DEVOPS_BUCKET/$REPO_NAME/$BRANCH_NAME
+        # Set up Job-definition.json
+        TARGET_WS_DIR=$DATABRICKS_WS_DEVOPS_DIR/$REPO_NAME/$BRANCH_NAME
+        MAJOR=v`cat build_info | grep RELEASEVERSION | awk -F '=' '{ print $2 }' | awk -F '.' '{ print $1 }'`
+        MINOR=`cat build_info | grep RELEASEVERSION | awk -F '=' '{ print $2 }' | awk -F '.' '{ print $2"."$3 }'`
+        RELEASE=`jq '.'$MAJOR' | ."'"$MINOR"'"' devops/release.json`
+        jobs_to_deploy=`echo $RELEASE | sed 's/\[//g' | sed 's/\]//g' | sed 's/"//g' | sed 's/ //g'`
+        for job in $(echo $jobs_to_deploy| sed 's/,/ /g'); do
+          job_folder=`echo $job | cut -f 1,2 -d /`
+          cp $job $job_folder/job.json
+          jobname=`jq .name $job_folder/job.json | sed 's/"//g'`
+          updated_jobname="$REPO_NAME/$BRANCH_NAME/$jobname"
+          jq --arg v $updated_jobname '.name = $v' $job_folder/job.json > $job
+          sed -i "s|##GS_ACCOUNT##|$GS_ACCOUNT|g" $job
+          sed -i "s|##DEVOPS_BUCKET##|$DEVOPS_BUCKET|g" $job
+          sed -i "s|##REPO_NAME##|$REPO_NAME|g" $job
+          sed -i "s|##BRANCH_NAME##|$BRANCH_NAME|g" $job
+          job_folder=`echo $job | cut -f 1,2 -d /`
+          for j in `ls $job_folder`; do
+            if [[ "$j" == "spark_env_vars.json" ]]; then
+              sed -i "s|##TARGET_WS_DIR##|$TARGET_WS_DIR|g" $job_folder/$j
+              val=`jq .$ENV $job_folder/spark_env_vars.json`
+              val2=`echo $val | tr -d '\r'`
+              sed -i '/new_cluster/a \"spark_env_vars\": ##SV##,' $job
+              sed -i "s|##SV##|$val2|g" $job
+            fi
+           done
+        done
+        # Update default job config to use group acl environment variables
+        sed -i "s/##PWR_GROUP_JOB_ACL##/$PWR_GROUP_JOB_ACL/g" databricks_notebook_jobs/default_job_config.json
+        sed -i "s/##APP_GROUP_JOB_ACL##/$APP_GROUP_JOB_ACL/g" databricks_notebook_jobs/default_job_config.json
+        # Databricks Job Deployment
+        databricks_deploy deploy_jobs --db_host $DATABRICKS_HOST \
+         --db_token $DATABRICKS_TOKEN \
+         --job_list "$jobs_to_deploy" \
+         --default_job_config databricks_notebook_jobs/default_job_config.json \
+         --target_ws_dir $TARGET_WS_DIR
+        mv .databricks_deploy/deployed_jobs.txt . && zip deployed_"$REPO_NAME"_"$BRANCH_NAME"_$MAJOR.$MINOR.zip deployed_jobs.txt
+        
+    - name: Upload Deployed-Jobs Artifacts
+      uses: actions/upload-artifact@v2
+      with:
+        name: Deployed-Jobs
+        path: deployed_*.zip
