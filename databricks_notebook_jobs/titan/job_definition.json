@@ -1,0 +1,151 @@
+{
+        "name": "Amer_Consumption_Correlation_Pipeline",
+        "email_notifications": {
+            "no_alert_for_skipped_runs": false
+        },
+        "timeout_seconds": 0,
+        "max_concurrent_runs": 1,
+        "tasks": [
+            {
+                "task_key": "Pos_Data_Preparation",
+                "notebook_task": {
+                    "notebook_path": "/ALAB/Consumption Correlation/05_Parameterized_Notebooks/01_Data_Preparation/POS_Data_Preparation",
+                    "source": "WORKSPACE"
+                },
+                "job_cluster_key": "Shared_job_cluster",
+                "timeout_seconds": 0,
+                "email_notifications": {}
+            },
+            {
+                "task_key": "Trax_pos_data_preparation",
+                "depends_on": [
+                    {
+                        "task_key": "Pos_Data_Preparation"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "/ALAB/Consumption Correlation/05_Parameterized_Notebooks/01_Data_Preparation/Pos_with_Trax_data_prep",
+                    "source": "WORKSPACE"
+                },
+                "job_cluster_key": "Shared_job_cluster",
+                "timeout_seconds": 0,
+                "email_notifications": {}
+            },
+            {
+                "task_key": "Sku_to_sub_ppg_data_preparation",
+                "depends_on": [
+                    {
+                        "task_key": "Trax_pos_data_preparation"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "/ALAB/Consumption Correlation/05_Parameterized_Notebooks/01_Data_Preparation/SKU_TO_SUB_PPG_data_preparation",
+                    "source": "WORKSPACE"
+                },
+                "job_cluster_key": "Shared_job_cluster",
+                "timeout_seconds": 0,
+                "email_notifications": {}
+            },
+            {
+                "task_key": "Lift_data_preparation",
+                "depends_on": [
+                    {
+                        "task_key": "Depromo_Bayesian_Model"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "/ALAB/Consumption Correlation/05_Parameterized_Notebooks/01_Data_Preparation/LIFT_data_preparation",
+                    "source": "WORKSPACE"
+                },
+                "job_cluster_key": "Shared_job_cluster",
+                "timeout_seconds": 0,
+                "email_notifications": {}
+            },
+            {
+                "task_key": "Depromo_Bayesian_Model",
+                "depends_on": [
+                    {
+                        "task_key": "Sku_to_sub_ppg_data_preparation"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "/ALAB/Consumption Correlation/05_Parameterized_Notebooks/02_ML_Models/Depromo_Data_modelling",
+                    "source": "WORKSPACE"
+                },
+                "job_cluster_key": "Shared_job_cluster",
+                "timeout_seconds": 0,
+                "email_notifications": {}
+            },
+            {
+                "task_key": "Recommendation_Model",
+                "depends_on": [
+                    {
+                        "task_key": "Lift_data_preparation"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "/ALAB/Consumption Correlation/05_Parameterized_Notebooks/02_ML_Models/recommendation_model",
+                    "source": "WORKSPACE"
+                },
+                "job_cluster_key": "Shared_job_cluster",
+                "timeout_seconds": 0,
+                "email_notifications": {}
+            },
+            {
+                "task_key": "Historical_Data_Preparation",
+                "depends_on": [
+                    {
+                        "task_key": "Depromo_Bayesian_Model"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "/ALAB/Consumption Correlation/05_Parameterized_Notebooks/01_Data_Preparation/Historical_Data_Preparation",
+                    "source": "WORKSPACE"
+                },
+                "job_cluster_key": "Shared_job_cluster",
+                "timeout_seconds": 0,
+                "email_notifications": {}
+            },
+            {
+                "task_key": "Recommendation_output",
+                "depends_on": [
+                    {
+                        "task_key": "Recommendation_Model"
+                    },
+                    {
+                        "task_key": "Historical_Data_Preparation"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "/ALAB/Consumption Correlation/05_Parameterized_Notebooks/03_Model_Output/Ranking_Recommendations_parameterized",
+                    "source": "WORKSPACE"
+                },
+                "job_cluster_key": "Shared_job_cluster",
+                "timeout_seconds": 0,
+                "email_notifications": {}
+            }
+        ],
+        "job_clusters": [
+            {
+                "job_cluster_key": "Shared_job_cluster",
+                "new_cluster": {
+                    "cluster_name": "",
+                    "spark_version": "10.4.x-cpu-ml-scala2.12",
+                    "gcp_attributes": {
+                        "use_preemptible_executors": false,
+                        "google_service_account": "mdz-p-amer-analyt-alab-dbrk-sa@prd-amer-analyt-dbrke-svc-d2.iam.gserviceaccount.com",
+                        "availability": "ON_DEMAND_GCP",
+                        "zone_id": "HA"
+                    },
+                    "node_type_id": "n2-highmem-4",
+                    "enable_elastic_disk": false,
+                    "runtime_engine": "STANDARD",
+                    "autoscale": {
+                        "min_workers": 4,
+                        "max_workers": 16
+                    }
+                }
+            }
+        ],
+        "format": "MULTI_TASK"
+}
