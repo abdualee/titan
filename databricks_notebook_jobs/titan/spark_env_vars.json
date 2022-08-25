@@ -1,0 +1,18 @@
+{
+    "prod": {
+      "TEAM_BUCKET": "delete-me-prd-amea-restricted-cat-ds-bkt",
+      "MLFLOW_EXPR_DIR": "##TARGET_WS_DIR##/databricks_notebook_jobs/my_first_job" 
+    },
+    "dev": {
+      "TEAM_BUCKET": "prd-amer-restricted-alab-ds-bkt",
+      "MLFLOW_EXPR_DIR": "##TARGET_WS_DIR##/databricks_notebook_jobs/my_first_job",
+      "ALAB_GCP_PROJECT": "prd-amer-analyt-dbrke-svc-d2", 
+      "ALAB_BQ_DATASET": "prd_amer_expl_alab",
+      "ALAB_GCS_BUCKET": "prd-amer-restricted-alab-ds-bkt",
+      "CONFIG_PATH": "/Consumption_Correlation_Raw_Data/cicd/src/"
+    },
+    "qa": {
+      "TEAM_BUCKET": "qa-amea-restricted-cat-ds-bkt",
+      "MLFLOW_EXPR_DIR": "##TARGET_WS_DIR##/databricks_notebook_jobs/my_first_job"
+    }
+}
